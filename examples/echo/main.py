@@ -2,7 +2,7 @@
 # them to the terminal).
 
 from aiolora import LoRa
-from machine import Pin, SPI, I2C
+from machine import Pin, SPI
 import uasyncio as asyncio
 
 # SPI pins
@@ -28,10 +28,6 @@ lora = LoRa(
     spi,
     cs=Pin(CS, Pin.OUT),
     irq=Pin(IRQ, Pin.IN),
-    frequency=915.0,
-    bandwidth=250000,
-    spreading_factor=10,
-    coding_rate=8,
 )
 
 async def main():

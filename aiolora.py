@@ -67,7 +67,7 @@ class LoRa:
         self.set_crc(kw.get('crc', False))
         # set LNA boost
         self._write(REG_LNA, self._read(REG_LNA) | 0x03)
-        # set auto AGC
+        # set AGC
         self._write(REG_MODEM_CONFIG_3, 0x04)
         self.set_tx_power(kw.get('tx_power', 24))
         self.set_sync_word(kw.get('sync_word', 0x12))
@@ -100,10 +100,12 @@ class LoRa:
         while self._sending:
             await asyncio.sleep(0.1)
 
-    def _get_irq_flags(self):
-        f = self._read(REG_IRQ_FLAGS)
-        self._write(REG_IRQ_FLAGS, f)
-        return f
+    async def recv(self):
+        while self._data is None:
+            await asyncio.sleep(0.1)
+        data = self._data
+        self._data = None
+        return data
 
     def get_rssi(self):
         rssi = self._read(REG_PKT_RSSI_VALUE)
@@ -114,8 +116,8 @@ class LoRa:
     def get_snr(self):
         return self._read(REG_PKT_SNR_VALUE) * 0.25
 
-    def set_tx_power(self, level, outputPin=PA_OUTPUT_PA_BOOST_PIN):
-        if outputPin == PA_OUTPUT_RFO_PIN:
+    def set_tx_power(self, level, pin=PA_OUTPUT_PA_BOOST_PIN):
+        if pin == PA_OUTPUT_RFO_PIN:
             level = min(max(level, 0), 14)
             self._write(REG_PA_CONFIG, 0x70 | level)
         else:
@@ -139,7 +141,6 @@ class LoRa:
         self._write(REG_MODEM_CONFIG_2, (reg2 & 0x0f) | ((sf << 4) & 0xf0))
 
     def set_bandwidth(self, bw):
-        self._bandwidth = bw
         bws = (7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000)
         i = 9
         for j in range(len(bws)):
@@ -170,12 +171,10 @@ class LoRa:
     def set_sync_word(self, sw):
         self._write(REG_SYNC_WORD, sw) 
 
-    async def recv(self):
-        while self._data is None:
-            await asyncio.sleep(0.1)
-        data = self._data
-        self._data = None
-        return data
+    def _get_irq_flags(self):
+        f = self._read(REG_IRQ_FLAGS)
+        self._write(REG_IRQ_FLAGS, f)
+        return f
 
     def _irq(self, event_source):
         f = self._get_irq_flags()

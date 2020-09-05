@@ -5,7 +5,7 @@
 
 from aiolora import LoRa
 import gc
-from machine import Pin, SPI, I2C
+from machine import Pin, SPI
 import network
 import uasyncio as asyncio
 
@@ -32,10 +32,6 @@ lora = LoRa(
     spi,
     cs=Pin(CS, Pin.OUT),
     irq=Pin(IRQ, Pin.IN),
-    frequency=915.0,
-    bandwidth=250000,
-    spreading_factor=10,
-    coding_rate=8,
 )
 
 # Setup WiFi Access Point
@@ -59,7 +55,12 @@ async def serve(reader, writer):
     if not line:
         await writer.wait_closed()
         return
-    method, path, rest = line.split(b' ')
+    parts = line.split(b' ')
+    if len(parts) < 3:
+        await writer.wait_closed()
+        return
+    method = parts[0]
+    path = parts[1]
     # Consuming remaining request headers
     while True:
         line = await reader.readline()
