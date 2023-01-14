@@ -55,7 +55,10 @@ class LoRa:
         self.cs = kw['cs']
         self.irq = kw['irq']
         self._data = None
-        self._sending = False
+        self._recv_lock = asyncio.Lock()
+        self._recv_event = asyncio.ThreadSafeFlag()
+        self._send_lock = asyncio.Lock()
+        self._send_event = asyncio.ThreadSafeFlag()
         if self._read(REG_VERSION) != 0x12:
             raise Exception('Invalid version or bad SPI connection')
         self._write(REG_OP_MODE, MODE_LORA | MODE_SLEEP)
@@ -80,32 +83,24 @@ class LoRa:
     async def send(self, x):
         if isinstance(x, str):
             x = x.encode()
-        # Wait if sending
-        while self._sending:
-            await asyncio.sleep(0.1)
-        self._sending = True
-        self._write(REG_OP_MODE, MODE_LORA | MODE_STDBY)
-        self._write(REG_DIO_MAPPING_1, 0x40)
-        self._write(REG_FIFO_ADDR_PTR, TX_BASE_ADDR)
-        n = len(x)
-        m = MAX_PKT_LENGTH - TX_BASE_ADDR
-        if n > m:
-            self._sending = False
-            raise ValueError('Max payload length is ' + str(m))
-        for i in range(n):
-            self._write(REG_FIFO, x[i])
-        self._write(REG_PAYLOAD_LENGTH, n)
-        self._write(REG_OP_MODE, MODE_LORA | MODE_TX)
-        # Wait until sent
-        while self._sending:
-            await asyncio.sleep(0.1)
+        async with self._send_lock:
+            self._write(REG_OP_MODE, MODE_LORA | MODE_STDBY)
+            self._write(REG_DIO_MAPPING_1, 0x40)
+            self._write(REG_FIFO_ADDR_PTR, TX_BASE_ADDR)
+            n = len(x)
+            m = MAX_PKT_LENGTH - TX_BASE_ADDR
+            if n > m:
+                raise ValueError('Max payload length is ' + str(m))
+            for i in range(n):
+                self._write(REG_FIFO, x[i])
+            self._write(REG_PAYLOAD_LENGTH, n)
+            self._write(REG_OP_MODE, MODE_LORA | MODE_TX)
+            await self._send_event.wait()
 
     async def recv(self):
-        while self._data is None:
-            await asyncio.sleep(0.1)
-        data = self._data
-        self._data = None
-        return data
+        async with self._recv_lock:
+            await self._recv_event.wait()
+            return self._data
 
     def get_rssi(self):
         rssi = self._read(REG_PKT_RSSI_VALUE)
@@ -178,21 +173,20 @@ class LoRa:
 
     def _irq(self, event_source):
         f = self._get_irq_flags()
-        if self._sending and f & IRQ_TX_DONE_MASK:
-            self._sending = False
+        if f & IRQ_TX_DONE_MASK:
             self._write(REG_DIO_MAPPING_1, 0x00)
             self._write(REG_OP_MODE, MODE_LORA | MODE_RX_CONTINUOUS)
+            self._send_event.set()
         if f & IRQ_RX_DONE_MASK:
             if f & IRQ_PAYLOAD_CRC_ERROR_MASK == 0:
-                self._read_data()
-
-    def _read_data(self):
-        self._write(REG_FIFO_ADDR_PTR, self._read(REG_FIFO_RX_CURRENT_ADDR))
-        n = self._read(REG_RX_NB_BYTES)
-        payload = bytearray(n)
-        for i in range(n):
-            payload[i] = self._read(REG_FIFO)
-        self._data = bytes(payload)
+                addr = self._read(REG_FIFO_RX_CURRENT_ADDR)
+                self._write(REG_FIFO_ADDR_PTR, addr)
+                n = self._read(REG_RX_NB_BYTES)
+                payload = bytearray(n)
+                for i in range(n):
+                    payload[i] = self._read(REG_FIFO)
+                self._data = bytes(payload)
+                self._recv_event.set()
 
     def _transfer(self, addr, x=0x00):
         resp = bytearray(1)
